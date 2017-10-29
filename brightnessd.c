@@ -22,6 +22,8 @@
 
 #include <unistd.h>
 #include <errno.h>
+#include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,7 +35,6 @@
 #include <xcb/screensaver.h>
 #include <xcb/dpms.h>
 #include <xcb/randr.h>
-
 
 #ifdef DEBUGLOG
     #define DEBUG(...) do {                                       \
@@ -82,7 +83,16 @@
 #define BRN_PRIORSCRSVR_UNDEFINED 0xff
 #define RET_OK 0
 
+///////////////////////////////////////////////////////////////////////////////
+// configuration
+///////////////////////////////////////////////////////////////////////////////
+static uint8_t DIM_PERCENT_INTERVAL = 20;
+static uint8_t DIM_PERCENT_TIMEOUT = 40;
 
+
+///////////////////////////////////////////////////////////////////////////////
+// types
+///////////////////////////////////////////////////////////////////////////////
 typedef enum {
     STATE_DPMS_STANDBY,
     STATE_DPMS_SUSPEND,
@@ -181,12 +191,15 @@ typedef enum {
 ///////////////////////////////////////////////////////////////////////////////
 // forward declarations
 ///////////////////////////////////////////////////////////////////////////////
+static void print_usage(void);
 static void signal_handler(const int sig) __attribute__((noreturn));
 static inline bool operation_handler(const operations_t operation, struct Txcb *pxcb, const uint8_t brn_percent, uint8_t *brn_cur_perc, uint8_t *brn_new_perc) __attribute__((always_inline));
 void shutdown(const setup_operations_t operation);
 bool query_state(struct Tglobalstate *state, const struct Txcb *pxcb);
 bool query_state_screensaver(struct Tglobalstate *pglobalstate, const struct Txcb *pxcb);
 bool query_state_dpms(struct Tglobalstate *pglobalstate, const struct Txcb *pxcb);
+static int parse_uint8_t(char* input, uint8_t* output);
+static int parse_args(int argc, char** argv);
 #ifndef USE_SYSFS_BACKLIGHT_CONTROL
 bool _operation_handler_randr(const operations_t operation, struct Txcb *pxcb, const uint8_t brn_percent, uint8_t *brn_cur_perc, uint8_t *brn_new_perc);
 int32_t _get_brightness_randr(struct Txcb *pxcb, const xcb_randr_output_t output, const xcb_atom_t *backlight_atom);
@@ -1017,6 +1030,80 @@ static uint8_t event_loop(struct Tglobalstate *pglobalstate, struct Txcb *pxcb, 
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// parse_uint8_t
+///////////////////////////////////////////////////////////////////////////////
+/** Converts a string to an uint8_t.
+
+    @param input            the string which should be converted
+    @param output           a pointer in which the conversion result will be written
+    @return                 a non-zero value means the conversion has failed
+*/
+static int parse_uint8_t(char* input, uint8_t* output) {
+    char *end = NULL;
+    errno = 0;
+
+    long temp = strtol(input, &end, 10);
+    if (end != input && errno != ERANGE && temp >= 0 && temp <= UINT8_MAX) {
+        *output = (uint8_t)temp;
+        return 0;
+    }
+    ERROR("[parse_uint8_t] Unable to convert %s to uint8_t\n", input);
+    return 1;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// print_usage
+///////////////////////////////////////////////////////////////////////////////
+void print_usage(void) {
+    printf("Usage: brightnessd [options...]\n"
+           "\n"
+           "Available options:\n"
+           "  --cycle-brightness   PERCENTAGE               Screen brightness percentage on cycle event (X11)\n"
+           "  --timeout-brightness PERCENTAGE               Screen brightness percentage on timeout event (X11)\n"
+           );
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// parse_args
+///////////////////////////////////////////////////////////////////////////////
+/** Parse command-line argumens.
+
+    @param argc           the string which should be converted
+    @param argv           a pointer in which the conversion result will be written
+    @return               a non-zero return value indicates an error
+*/
+static int parse_args(int argc, char** argv) {
+
+    int err = 0;
+    int opt = 0;
+    static struct option long_options[] = {
+        {"cycle-brightness",   required_argument,       0,  'c' },
+        {"timeout-brightness", required_argument,       0,  't' },
+        {"help",               no_argument,             0,  'h' },
+        {0,                    0,                       0,  0   }
+    };
+
+    int long_index =0;
+    while ((opt = getopt_long(argc, argv, "c:t:h",
+                              long_options, &long_index)) != -1) {
+        switch (opt) {
+        case 'c':
+            err = parse_uint8_t(optarg, &DIM_PERCENT_INTERVAL);
+            break;
+        case 't':
+            err = parse_uint8_t(optarg, &DIM_PERCENT_TIMEOUT);
+            break;
+        case 'h':
+            print_usage();
+            exit(0);
+        default:
+            print_usage();
+            err = 1;
+        }
+    }
+    return err;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // main()
@@ -1027,7 +1114,14 @@ static uint8_t event_loop(struct Tglobalstate *pglobalstate, struct Txcb *pxcb, 
 
     @see event_loop
 */
-int main() {
+int main (int argc, char** argv) {
+
+    if (parse_args(argc, argv)) {
+        ERROR("[main] Error parsing command-line arguments.\n");
+        return 1;
+    }
+    DEBUG("[main] Configuration: DIM_PERCENT_INTERVAL=%d, DIM_PERCENT_TIMEOUT=%d\n", DIM_PERCENT_INTERVAL, DIM_PERCENT_TIMEOUT);
+
     xcb_generic_error_t               *xcb_generic_error;
     xcb_void_cookie_t                  xcb_void_cookie;
     const xcb_query_extension_reply_t *query_ext_reply;
