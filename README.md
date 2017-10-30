@@ -63,10 +63,6 @@ Use `xset s 240 60` to set `timeout` to 240 seconds and `cycle` to 60 seconds, r
 
 True. _brightnessd_ was done just for fun and to code some application in C using [xcb](http://xcb.freedesktop.org/).
 
-#### Why is most configuration possible at compile-time only? ####
-
-I didn't feel the need to implement, e.g., [getopt](http://www.gnu.org/software/libc/manual/html_node/Getopt.html). However, if you do, Pull Requests are very welcome :)
-
 #### brightnessd behaves strangely, what can I do? ####
 
 Please recompile _brightnessd_ with the `debug` or `debug_sysfs` `make` target, respectively, to get more information on what's going on while _brightnessd_ runs. The resulting log is usually helpful in identifying problems or bugs.
