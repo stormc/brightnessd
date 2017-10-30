@@ -828,7 +828,7 @@ static void signal_handler(const int sig) {
     @see RET_OK
 */
 static uint8_t _event_loop_scrsvr_on_timeout(struct Txcb *pxcb, struct Teventstate *peventstate) {
-    if (!operation_handler(OPERATION_GETBRIGHTNESS, pxcb, 0, &peventstate->brn_old_perc, &peventstate->brn_cur_perc)) {
+    if (!operation_handler(OPERATION_GETBRIGHTNESS, pxcb, 0, &peventstate->brn_priorscrsvr_perc , &peventstate->brn_cur_perc)) {
         ERROR("Error: Failed to get brightness on screensaver timeout. Exiting.\n");
         return EXIT_FAILURE;
     }
@@ -852,7 +852,7 @@ static uint8_t _event_loop_scrsvr_on_timeout(struct Txcb *pxcb, struct Teventsta
         DEBUG("[eventloop] current brightness %d%% is below target brightness of %d%%, doing nothing.\n", peventstate->brn_cur_perc, DIM_PERCENT_TIMEOUT);
         return RET_OK;
     }
-    if (!operation_handler(OPERATION_SETBRIGHTNESS, pxcb, DIM_PERCENT_TIMEOUT, &peventstate->brn_priorscrsvr_perc, &peventstate->brn_cur_perc)) {
+    if (!operation_handler(OPERATION_SETBRIGHTNESS, pxcb, DIM_PERCENT_TIMEOUT, &peventstate->brn_old_perc, &peventstate->brn_cur_perc)) {
         ERROR("Error: Failed to decrease brightness on screensaver timeout. Exiting.\n");
         return EXIT_FAILURE;
     }
