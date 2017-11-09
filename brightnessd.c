@@ -36,6 +36,7 @@
 #include <xcb/dpms.h>
 #include <xcb/randr.h>
 
+
 #ifdef DEBUGLOG
     #define DEBUG(...) do {                                       \
         (void)fprintf(stderr, "%s", gs_color.green);              \
@@ -199,7 +200,7 @@ bool query_state(struct Tglobalstate *state, const struct Txcb *pxcb);
 bool query_state_screensaver(struct Tglobalstate *pglobalstate, const struct Txcb *pxcb);
 bool query_state_dpms(struct Tglobalstate *pglobalstate, const struct Txcb *pxcb);
 static int parse_uint8_t(char* input, uint8_t* output);
-static int parse_args(int argc, char** argv);
+static int parse_args(int len, char** args);
 #ifndef USE_SYSFS_BACKLIGHT_CONTROL
 bool _operation_handler_randr(const operations_t operation, struct Txcb *pxcb, const uint8_t brn_percent, uint8_t *brn_cur_perc, uint8_t *brn_new_perc);
 int32_t _get_brightness_randr(struct Txcb *pxcb, const xcb_randr_output_t output, const xcb_atom_t *backlight_atom);
@@ -1031,7 +1032,7 @@ static uint8_t event_loop(struct Tglobalstate *pglobalstate, struct Txcb *pxcb, 
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// parse_uint8_t
+// parse_uint8_t()
 ///////////////////////////////////////////////////////////////////////////////
 /** Converts a string to an uint8_t.
 
@@ -1053,7 +1054,7 @@ static int parse_uint8_t(char* input, uint8_t* output) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// print_usage
+// print_usage()
 ///////////////////////////////////////////////////////////////////////////////
 void print_usage(void) {
     printf("Usage: brightnessd [options...]\n"
@@ -1065,15 +1066,16 @@ void print_usage(void) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// parse_args
+// parse_args()
 ///////////////////////////////////////////////////////////////////////////////
-/** Parse command-line argumens.
+/** Parses a string array (e.g. command-line arguments) and modifies the global
+    state (configuration).
 
-    @param argc           the string which should be converted
-    @param argv           a pointer in which the conversion result will be written
-    @return               a non-zero return value indicates an error
+    @param len           the length of the string array
+    @param args          an array of strings which should be parsed
+    @return              a non-zero return value indicates an error
 */
-static int parse_args(int argc, char** argv) {
+static int parse_args(int len, char** args) {
 
     int err = 0;
     int opt = 0;
@@ -1084,8 +1086,8 @@ static int parse_args(int argc, char** argv) {
         {0,                    0,                       0,  0   }
     };
 
-    int long_index =0;
-    while ((opt = getopt_long(argc, argv, "c:t:h",
+    int long_index = 0;
+    while ((opt = getopt_long(len, args, "c:t:h",
                               long_options, &long_index)) != -1) {
         switch (opt) {
         case 'c':
@@ -1096,7 +1098,7 @@ static int parse_args(int argc, char** argv) {
             break;
         case 'h':
             print_usage();
-            exit(0);
+            exit(EXIT_SUCCESS);
         default:
             print_usage();
             err = 1;
@@ -1114,11 +1116,11 @@ static int parse_args(int argc, char** argv) {
 
     @see event_loop
 */
-int main (int argc, char** argv) {
+int main(int argc, char** argv) {
 
     if (parse_args(argc, argv)) {
         ERROR("[main] Error parsing command-line arguments.\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
     DEBUG("[main] Configuration: DIM_PERCENT_INTERVAL=%d, DIM_PERCENT_TIMEOUT=%d\n", DIM_PERCENT_INTERVAL, DIM_PERCENT_TIMEOUT);
 
