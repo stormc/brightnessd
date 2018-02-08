@@ -30,16 +30,26 @@
 #include <string.h>
 #include <sysexits.h>
 #include <stdbool.h>
+#include <time.h>
 #include <xcb/xcb.h>
 #include <xcb/xcb_event.h>
 #include <xcb/screensaver.h>
 #include <xcb/dpms.h>
 #include <xcb/randr.h>
 
+void print_timestamp(FILE* stream);
+void print_timestamp(FILE* stream) {
+    time_t t = time(NULL);
+    struct tm* tm = localtime(&t);
+    char buf[20];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+    fprintf(stream, "[%s]", buf);
+}
 
 #ifdef DEBUGLOG
     #define DEBUG(...) do {                                       \
         (void)fprintf(stderr, "%s", gs_color.green);              \
+        (void)print_timestamp(stderr);                            \
         (void)fprintf(stderr, "["PROGNAME"::DEBUG]" __VA_ARGS__); \
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
@@ -49,6 +59,7 @@
 #ifdef TRACELOG
     #define TRACE(...) do {                                       \
         (void)fprintf(stderr, "%s", gs_color.gray);               \
+        (void)print_timestamp(stderr);                            \
         (void)fprintf(stderr, "["PROGNAME"::TRACE]" __VA_ARGS__); \
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
@@ -57,11 +68,13 @@
 #endif
 #define ERROR(...) do {                                 \
     (void)fprintf(stderr, "%s", gs_color.red);          \
+    (void)print_timestamp(stderr);                      \
     (void)fprintf(stderr, "["PROGNAME"] " __VA_ARGS__); \
     (void)fprintf(stderr, "%s", gs_color.reset);        \
 } while (0)
 #define WARN(...)  do {                                 \
     (void)fprintf(stderr, "%s", gs_color.yellow);       \
+    (void)print_timestamp(stderr);                      \
     (void)fprintf(stderr, "["PROGNAME"] " __VA_ARGS__); \
     (void)fprintf(stderr, "%s", gs_color.reset);        \
 } while (0)
