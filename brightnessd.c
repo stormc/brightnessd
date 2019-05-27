@@ -44,7 +44,7 @@
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
 #else
-    #define DEBUG(...) {}
+    #define DEBUG(...) do {} while (0)
 #endif
 #ifdef TRACELOG
     #define TRACE(...) do {                                       \
@@ -53,7 +53,7 @@
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
 #else
-    #define TRACE(...) {}
+    #define TRACE(...) do {} while (0)
 #endif
 #define ERROR(...) do {                                 \
     (void)fprintf(stderr, "%s", gs_color.red);          \
