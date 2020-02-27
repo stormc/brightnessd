@@ -30,16 +30,27 @@
 #include <string.h>
 #include <sysexits.h>
 #include <stdbool.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <xcb/xcb.h>
 #include <xcb/xcb_event.h>
 #include <xcb/screensaver.h>
 #include <xcb/dpms.h>
 #include <xcb/randr.h>
 
+void print_timestamp(FILE* stream);
+void print_timestamp(FILE* stream) {
+    time_t t = time(NULL);
+    struct tm* tm = localtime(&t);
+    char buf[20];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+    fprintf(stream, "[%s]", buf);
+}
 
 #ifdef DEBUGLOG
     #define DEBUG(...) do {                                       \
         (void)fprintf(stderr, "%s", gs_color.green);              \
+        (void)print_timestamp(stderr);                            \
         (void)fprintf(stderr, "["PROGNAME"::DEBUG]" __VA_ARGS__); \
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
@@ -49,6 +60,7 @@
 #ifdef TRACELOG
     #define TRACE(...) do {                                       \
         (void)fprintf(stderr, "%s", gs_color.gray);               \
+        (void)print_timestamp(stderr);                            \
         (void)fprintf(stderr, "["PROGNAME"::TRACE]" __VA_ARGS__); \
         (void)fprintf(stderr, "%s", gs_color.reset);              \
     } while (0)
@@ -57,11 +69,13 @@
 #endif
 #define ERROR(...) do {                                 \
     (void)fprintf(stderr, "%s", gs_color.red);          \
+    (void)print_timestamp(stderr);                      \
     (void)fprintf(stderr, "["PROGNAME"] " __VA_ARGS__); \
     (void)fprintf(stderr, "%s", gs_color.reset);        \
 } while (0)
 #define WARN(...)  do {                                 \
     (void)fprintf(stderr, "%s", gs_color.yellow);       \
+    (void)print_timestamp(stderr);                      \
     (void)fprintf(stderr, "["PROGNAME"] " __VA_ARGS__); \
     (void)fprintf(stderr, "%s", gs_color.reset);        \
 } while (0)
@@ -89,7 +103,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 static uint8_t DIM_PERCENT_INTERVAL = 20;
 static uint8_t DIM_PERCENT_TIMEOUT = 40;
-
+static char* EXTERNAL_CMD_TIMEOUT;
+static char* EXTERNAL_CMD_INTERVAL;
 
 ///////////////////////////////////////////////////////////////////////////////
 // types
@@ -201,6 +216,9 @@ bool query_state_screensaver(struct Tglobalstate *pglobalstate, const struct Txc
 bool query_state_dpms(struct Tglobalstate *pglobalstate, const struct Txcb *pxcb);
 static int parse_uint8_t(char* input, uint8_t* output);
 static int parse_args(int len, char** args);
+static void spawn_async(char* cmd);
+static int parse_cmd(char* cmd, size_t len, char **result);
+
 #ifndef USE_SYSFS_BACKLIGHT_CONTROL
 bool _operation_handler_randr(const operations_t operation, struct Txcb *pxcb, const uint8_t brn_percent, uint8_t *brn_cur_perc, uint8_t *brn_new_perc);
 int32_t _get_brightness_randr(struct Txcb *pxcb, const xcb_randr_output_t output, const xcb_atom_t *backlight_atom);
@@ -842,6 +860,10 @@ static void signal_handler(const int sig) {
     @see RET_OK
 */
 static uint8_t _event_loop_scrsvr_on_timeout(struct Txcb *pxcb, struct Teventstate *peventstate) {
+    if (EXTERNAL_CMD_TIMEOUT) {
+        spawn_async(EXTERNAL_CMD_TIMEOUT);
+    }
+
     if (!operation_handler(OPERATION_GETBRIGHTNESS, pxcb, 0, &peventstate->brn_priorscrsvr_perc , &peventstate->brn_cur_perc)) {
         ERROR("Error: Failed to get brightness on screensaver timeout. Exiting.\n");
         return EXIT_FAILURE;
@@ -888,6 +910,10 @@ static uint8_t _event_loop_scrsvr_on_timeout(struct Txcb *pxcb, struct Teventsta
     @see RET_OK
 */
 static uint8_t _event_loop_scrsvr_on_interval(struct Txcb *pxcb, struct Teventstate *peventstate) {
+    if (EXTERNAL_CMD_INTERVAL) {
+        spawn_async(EXTERNAL_CMD_INTERVAL);
+    }
+
     if (!peventstate->brn_interval_set) {
         peventstate->brn_interval_set = true;
         if (peventstate->brn_cur_perc < DIM_PERCENT_INTERVAL) {
@@ -901,6 +927,7 @@ static uint8_t _event_loop_scrsvr_on_interval(struct Txcb *pxcb, struct Teventst
         DEBUG("[eventloop] brightness %d%% -> %d%%\n", peventstate->brn_old_perc, peventstate->brn_cur_perc);
         return RET_OK;
     }
+
     DEBUG("[eventloop] brightness already set to %d%%\n", peventstate->brn_cur_perc);
     return RET_OK;
 }
@@ -1032,7 +1059,65 @@ static uint8_t event_loop(struct Tglobalstate *pglobalstate, struct Txcb *pxcb, 
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// parse_uint8_t()
+// spawn_async
+///////////////////////////////////////////////////////////////////////////////
+/** Asynchronously execute a shell command, i.e. don't wait for it to complete.
+
+    @param cmd              the command to be executed in a shell
+*/
+static void spawn_async(char* cmd) {
+    DEBUG("[spawn_async] executing external command: %s\n", cmd);
+    char *argv[64];
+    char* cmd_dup = strdup(cmd);
+    if (parse_cmd(cmd_dup, 64, argv) != 0 || *argv == NULL) {
+        ERROR("[spawn_async] Unable to parse command: %s\n", cmd);
+    } else {
+        pid_t process = fork();
+        if (process < 0) {
+            ERROR("[spawn_async] fork error");
+        } else if (process == 0) { // child
+            execvp(*argv, argv);
+            perror("[spawn_async] exec failed");
+            exit(EXIT_FAILURE);
+        }
+    }
+    free(cmd_dup);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// parse_cmd
+///////////////////////////////////////////////////////////////////////////////
+/** Helper function to parse a cmd string into an exec-compatible array.
+    Can deal with noisy whitespace.
+
+    @param cmd                cmd string to be parsed, e.g. "/usr/bin/systemctl suspend"; variable will be mutated!
+    @param len                length of variable result
+    @param result             parse result, e.g. {"/usr/bin/systemctl", "suspend", NULL}
+    @return                   non-zero in case of an error
+*/
+static int parse_cmd(char* cmd, size_t len, char **result) {
+    size_t count = 0;
+    while (*cmd != '\0') {
+        if (count == len) {
+            return -1;
+        }
+        while (*cmd == ' ' || *cmd == '\t' || *cmd == '\n') {
+            // remove whitespaces etc.
+            *cmd++ = '\0';
+        }
+        *result++ = cmd; // found beginning of command
+        ++count;
+        while (*cmd != '\0' && *cmd != ' ' && *cmd != '\t' && *cmd != '\n') {
+            // parse until next whitespace is found
+            cmd++;
+        }
+    }
+    *result = NULL;
+    return 0;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// parse_uint8_t
 ///////////////////////////////////////////////////////////////////////////////
 /** Converts a string to an uint8_t.
 
@@ -1061,7 +1146,9 @@ void print_usage(void) {
            "\n"
            "Available options:\n"
            "  --cycle-brightness   PERCENTAGE               Screen brightness percentage on cycle event (X11)\n"
+           "  --cycle-command      CMD                      Execute CMD on cycle event\n"
            "  --timeout-brightness PERCENTAGE               Screen brightness percentage on timeout event (X11)\n"
+           "  --timeout-command    CMD                      Execute CMD on timeout event\n"
            );
 }
 
@@ -1081,20 +1168,28 @@ static int parse_args(int len, char** args) {
     int opt = 0;
     static struct option long_options[] = {
         {"cycle-brightness",   required_argument,       0,  'c' },
+        {"cycle-command",      required_argument,       0,  'd' },
         {"timeout-brightness", required_argument,       0,  't' },
+        {"timeout-command",    required_argument,       0,  'u' },
         {"help",               no_argument,             0,  'h' },
         {0,                    0,                       0,  0   }
     };
 
     int long_index = 0;
-    while ((opt = getopt_long(len, args, "c:t:h",
+    while ((opt = getopt_long(len, args, "c:d:t:u:h",
                               long_options, &long_index)) != -1) {
         switch (opt) {
         case 'c':
             err = parse_uint8_t(optarg, &DIM_PERCENT_INTERVAL);
             break;
+        case 'd':
+            EXTERNAL_CMD_INTERVAL = strdup(optarg);
+            break;
         case 't':
             err = parse_uint8_t(optarg, &DIM_PERCENT_TIMEOUT);
+            break;
+        case 'u':
+            EXTERNAL_CMD_TIMEOUT = strdup(optarg);
             break;
         case 'h':
             print_usage();
@@ -1122,7 +1217,16 @@ int main(int argc, char** argv) {
         ERROR("[main] Error parsing command-line arguments.\n");
         exit(EXIT_FAILURE);
     }
-    DEBUG("[main] Configuration: DIM_PERCENT_INTERVAL=%d, DIM_PERCENT_TIMEOUT=%d\n", DIM_PERCENT_INTERVAL, DIM_PERCENT_TIMEOUT);
+    DEBUG("[main] Configuration: DIM_PERCENT_INTERVAL=%d, DIM_PERCENT_TIMEOUT=%d, EXTERNAL_CMD_TIMOUT=%s, EXTERNAL_CMD_INTERVAL=%s\n",
+          DIM_PERCENT_INTERVAL, DIM_PERCENT_TIMEOUT, EXTERNAL_CMD_TIMEOUT, EXTERNAL_CMD_INTERVAL);
+
+    // avoid zombie processes without using double fork (and messing up the process tree)
+    struct sigaction sigchld_action = {
+        .sa_handler = SIG_DFL,
+        .sa_flags = SA_NOCLDWAIT
+    };
+    sigaction(SIGCHLD, &sigchld_action, NULL);
+
 
     xcb_generic_error_t               *xcb_generic_error;
     xcb_void_cookie_t                  xcb_void_cookie;
